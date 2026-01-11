@@ -1,167 +1,114 @@
-# TrashMail Python API Client
+# TrashMail OPAQUE Authentication Client
 
-A Python client for the TrashMail.com API with authentication support.
+A working TypeScript client for TrashMail.com using the OPAQUE protocol (Zero-Knowledge authentication).
 
-## The OPAQUE Compatibility Problem
+## The Problem with Python `opaque`
 
-### Why the original code failed
+The Python `opaque` package (libopaque) is **NOT compatible** with TrashMail's OPAQUE implementation:
 
-The original `failing_opaque_code.py` uses the Python `opaque` package (libopaque), which is **NOT compatible** with TrashMail's OPAQUE implementation.
+| Library | Implementation | Compatible |
+|---------|---------------|------------|
+| `@serenity-kit/opaque` | opaque-ke (Rust/WASM) | ✅ Yes |
+| `libopaque` (Python) | libsodium (C) | ❌ No |
 
-| Library | Implementation | Base | Wire Format |
-|---------|---------------|------|-------------|
-| `@serenity-kit/opaque` (TrashMail) | JavaScript/WASM | opaque-ke (Rust) | Custom base64url |
-| `libopaque` (Python) | C + Python bindings | libsodium | Different format |
+The `context` parameter was not the issue - these are completely different OPAQUE implementations with incompatible wire formats.
 
-These are completely different implementations of the OPAQUE protocol with incompatible wire formats. The `context` parameter was not the issue - the libraries simply cannot interoperate.
+## Solution: Use TypeScript/JavaScript
 
-### Solution
-
-This repository provides a working Python client that uses the **classic login endpoint**, which:
-
-1. Works immediately without any OPAQUE complexity
-2. Is simple and reliable for API automation
-3. Automatically migrates accounts to OPAQUE on the server side
+This repository provides a working TypeScript implementation using `@serenity-kit/opaque`.
 
 ## Installation
 
 ```bash
-pip install requests
+npm install
 ```
 
 ## Usage
 
-### Basic Login
-
-```python
-from trashmail_api import TrashMailClient
-
-client = TrashMailClient()
-
-# Login
-if client.login("your@email.com", "your_password"):
-    # Get DEAs
-    deas = client.get_deas()
-    for dea in deas:
-        print(dea['dea'])
-
-    # Create a new DEA
-    new_dea = client.create_dea("forward-to@example.com")
-    print(f"Created: {new_dea['dea']}")
-
-    # Logout
-    client.logout()
-```
-
-### Using Environment Variables
+### Set environment variables
 
 ```bash
 export TRASHMAIL_USER="your@email.com"
 export TRASHMAIL_PASS="your_password"
-python trashmail_api.py
+
+# Or for PAT authentication:
+export TRASHMAIL_PASS="tmpat_xxxxxx..."
 ```
 
-### Personal Access Tokens (PAT)
+### Run
 
-PAT authentication via OPAQUE is currently not supported in Python due to library incompatibility. Use the classic login instead:
-
-```python
-client = TrashMailClient()
-client.login("your@email.com", "your_password")
+```bash
+npm start
 ```
 
-## Advanced: True OPAQUE in Python
+Or with ts-node directly:
 
-If you absolutely need OPAQUE authentication in Python, here are your options:
-
-### Option 1: WASM Runtime (Recommended for OPAQUE)
-
-Load the @serenity-kit/opaque WASM module using `wasmer` or `wasmtime`:
-
-```python
-# pip install wasmer wasmer-compiler-cranelift
-import wasmer
-
-# Load the WASM module
-wasm_bytes = open("path/to/opaque.wasm", "rb").read()
-store = wasmer.Store()
-module = wasmer.Module(store, wasm_bytes)
-instance = wasmer.Instance(module)
-
-# Call OPAQUE functions
-# (Requires understanding of the WASM interface)
+```bash
+npx ts-node trashmail-opaque-client.ts
 ```
 
-### Option 2: Node.js Subprocess
+## How It Works
 
-If Node.js is available:
+### OPAQUE Login Flow
 
-```python
-import subprocess
-import json
+```typescript
+import * as opaque from "@serenity-kit/opaque";
 
-def opaque_start_login(password):
-    code = f"""
-    const opaque = require('@serenity-kit/opaque');
-    (async () => {{
-        await opaque.ready;
-        const result = opaque.client.startLogin({{ password: '{password}' }});
-        console.log(JSON.stringify(result));
-    }})();
-    """
-    result = subprocess.run(["node", "-e", code], capture_output=True, text=True)
-    return json.loads(result.stdout)
+// Wait for WASM initialization
+await opaque.ready;
+
+// Step 1: Create credential request (KE1)
+const { clientLoginState, startLoginRequest } = opaque.client.startLogin({
+  password: "your_password",
+});
+
+// Step 2: Send to server, get KE2
+const response = await fetch("https://trashmail.com/?api=1&cmd=opaque_login_init", {
+  method: "POST",
+  body: JSON.stringify({ username, startLoginRequest }),
+});
+const { session_id, loginResponse } = await response.json();
+
+// Step 3: Process KE2, create KE3
+const result = opaque.client.finishLogin({
+  clientLoginState,
+  loginResponse,
+  password: "your_password",
+});
+
+// Step 4: Send KE3 to server for verification
+await fetch("https://trashmail.com/?api=1&cmd=opaque_login_finish", {
+  method: "POST",
+  body: JSON.stringify({ session_id, finishLoginRequest: result.finishLoginRequest }),
+});
 ```
 
-### Option 3: PyO3 Bindings for opaque-ke
+### PAT-OPAQUE Authentication
 
-Create native Python bindings for the Rust `opaque-ke` library using PyO3. This would require:
+Personal Access Tokens use the same OPAQUE flow but with different endpoints:
 
-1. Rust toolchain
-2. Understanding of opaque-ke internals
-3. Custom compilation
+- `pat_opaque_auth_init` instead of `opaque_login_init`
+- `pat_opaque_auth_finish` instead of `opaque_login_finish`
+- The PAT token (`tmpat_xxx...`) is used as the password
+
+## For Python Users
+
+If you must use Python, your options are:
+
+1. **Call this TypeScript code via subprocess**
+2. **Load the WASM module** using `wasmer` or `wasmtime`
+3. **Create PyO3 bindings** for the Rust `opaque-ke` library
+
+The Python `opaque` (libopaque) package will **never work** with TrashMail because it's a different implementation.
 
 ## API Reference
 
-### TrashMailClient
-
-```python
-client = TrashMailClient(base_url="https://trashmail.com", lang="en")
-```
-
-#### Methods
-
-- `login(username, password)` - Authenticate with classic login
-- `logout()` - End session
-- `api_call(cmd, **params)` - Make authenticated API call
-- `get_deas()` - List all Disposable Email Addresses
-- `create_dea(real_email, **options)` - Create new DEA
-- `check_auth_methods(username)` - Check available auth methods
-
-#### Properties
-
-- `is_authenticated` - Check if logged in
-- `username` - Current username
-
-## Error Handling
-
-```python
-from trashmail_api import TrashMailClient, TrashMailAPIError
-
-client = TrashMailClient()
-
-try:
-    client.login("user@example.com", "wrong_password")
-except TrashMailAPIError as e:
-    print(f"Error: {e}")
-    print(f"Error code: {e.error_code}")  # e.g., 3 for invalid credentials
-```
-
-## Contributing
-
-1. Fork the repository
-2. Create your feature branch
-3. Submit a pull request
+| Function | Description |
+|----------|-------------|
+| `opaqueLogin(username, password)` | OPAQUE login for regular passwords |
+| `patOpaqueLogin(username, patToken)` | OPAQUE login for Personal Access Tokens |
+| `opaqueRegister(username, password)` | Register OPAQUE credentials |
+| `checkAuthMethods(username)` | Check if OPAQUE is enabled for user |
 
 ## License
 

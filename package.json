@@ -1,0 +1,19 @@
+{
+  "name": "trashmail-opaque-client",
+  "version": "1.0.0",
+  "description": "TrashMail OPAQUE Authentication Client",
+  "main": "trashmail-opaque-client.js",
+  "scripts": {
+    "start": "npx ts-node trashmail-opaque-client.ts",
+    "build": "tsc",
+    "login": "npx ts-node trashmail-opaque-client.ts"
+  },
+  "dependencies": {
+    "@serenity-kit/opaque": "^0.8.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "ts-node": "^10.9.0",
+    "typescript": "^5.0.0"
+  }
+}
